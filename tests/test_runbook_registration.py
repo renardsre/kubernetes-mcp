@@ -32,6 +32,7 @@ class RunbookRegistrationTests(unittest.TestCase):
                     "inspect_deployment_health",
                     "find_unhealthy_deployments",
                     "get_pod_logs",
+                    "resolve_workloads",
                     "search_runbooks",
                 },
             )

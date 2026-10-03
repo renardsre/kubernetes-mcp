@@ -7,6 +7,7 @@ from mcp_types import (
     ResourceTemplateReference,
 )
 
+from capability_metadata import capability_meta
 from resources.catalog import (
     complete_runbook_slugs,
     list_runbook_catalog,
@@ -51,6 +52,7 @@ def register_kubernetes_resources(mcp: MCPServer) -> None:
         name="kubernetes-runbook-catalog",
         description="A concise catalog of bundled Kubernetes runbooks.",
         mime_type="application/json",
+        meta=capability_meta("workflow_discovery"),
     )(get_runbook_catalog_resource)
 
     mcp.resource(
@@ -58,6 +60,7 @@ def register_kubernetes_resources(mcp: MCPServer) -> None:
         name="kubernetes-runbook",
         description="A bundled Kubernetes troubleshooting runbook.",
         mime_type="text/markdown",
+        meta=capability_meta("workflow_consume"),
     )(get_runbook_resource)
 
     mcp.completion()(complete_runbook_slug)

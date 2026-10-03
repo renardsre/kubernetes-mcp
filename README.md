@@ -1,6 +1,6 @@
 # Kubernetes MCP server
 
-A read-only MCP server for investigating Kubernetes Deployments. It exposes four focused Tools, two Prompts, and a set of troubleshooting runbooks. The same capabilities work over stdio and Streamable HTTP.
+A read-only MCP server for investigating Kubernetes workloads. It exposes five focused Tools, two Prompts, and a set of troubleshooting runbooks. The same capabilities work over stdio and Streamable HTTP.
 
 The main workflow is simple: inspect a Deployment once, use the evidence it returns, and collect more only when there is a specific unanswered question.
 
@@ -10,7 +10,7 @@ The main workflow is simple: inspect a Deployment once, use the evidence it retu
 server.py                    # CLI and transport startup
 mcp_server.py                # one MCPServer factory for both transports
 client.py                    # read-only smoke client for either transport
-tools/kubernetes.py          # four Tool schemas and thin MCP wrappers
+tools/kubernetes.py          # five Tool schemas and thin MCP wrappers
 services/kubernetes.py       # Kubernetes API reads, evidence correlation, classification
 prompts/
   common.py                  # shared Jinja renderer and validators
@@ -25,11 +25,12 @@ tests/                       # unit, schema, and transport checks
 
 `mcp_server.py` registers capabilities once. `server.py` only chooses the transport. Kubernetes API calls and evidence processing live in `services/kubernetes.py`, separate from MCP Tool registration.
 
-The four Tools are:
+The five Tools are:
 
 - `inspect_deployment_health` gathers bounded health evidence for a known Deployment. It combines Deployment, ReplicaSet, Pod, container, event, and scheduling data using the existing four Kubernetes reads.
 - `find_unhealthy_deployments` finds unhealthy Deployment candidates in one namespace.
 - `get_pod_logs` reads bounded logs from a targeted Pod and container.
+- `resolve_workloads` resolves exact names, prefixes, globs, substrings, name tokens, or Kubernetes label selectors within one namespace and workload kind. Token matching accepts incomplete token prefixes such as `kraken-dash`. Use `auto` to collect and rank all plausible exact, prefix, substring, and token matches without silently choosing one. Each match includes its method and reason. `resolved` is true only for one match. Results are capped at 100, with `match_count` and `truncated` showing when more exist.
 - `search_runbooks` finds relevant runbooks by failure class or symptom. It returns metadata and a Resource URI, not the runbook body.
 
 The inspection result includes routing fields such as `evidence_sufficient`, `logs_recommended`, and `previous_logs_recommended`. It also separates three levels of failure information:
@@ -127,7 +128,7 @@ MCP_LIVE_TRANSPORT_TEST=1 uv run python -m unittest discover -s tests -p test_tr
 
 ## Adding a Tool
 
-Check the four existing Tools first. Add a new one only when it provides a genuinely new, bounded capability. Do not add a low-level Pod or Event Tool when `inspect_deployment_health` already supplies the evidence.
+Check the five existing Tools first. Add a new one only when it provides a genuinely new, bounded capability. Do not add a low-level Pod or Event Tool when `inspect_deployment_health` already supplies the evidence.
 
 Put Kubernetes reads and correlation in `services/kubernetes.py`. Put the typed `@mcp.tool()` wrapper in `tools/kubernetes.py`. Keep its output bounded and its description short. Test registration, input bounds, success and error cases, and the number of Kubernetes API reads. A write Tool needs a separate safety and approval design.
 

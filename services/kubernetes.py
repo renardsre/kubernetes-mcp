@@ -1,5 +1,7 @@
+import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from fnmatch import fnmatchcase
 from typing import cast
 
 from kubernetes import client, config
@@ -9,6 +11,8 @@ config.load_kube_config()
 
 core = client.CoreV1Api()
 apps = client.AppsV1Api()
+
+RESOLVED_MATCH_LIMIT = 100
 
 
 def api_error(exc: ApiException) -> RuntimeError:
@@ -975,6 +979,117 @@ def inspect_deployment_health(
             affected_post_start_pods,
         )
     return result
+
+
+def resolve_workloads(
+    namespace: str,
+    kind: str,
+    pattern: str,
+    match_type: str,
+) -> dict[str, object]:
+    """Resolve names for one workload kind within one namespace."""
+    if not namespace.strip() or not pattern.strip():
+        raise ValueError("namespace and pattern must not be empty")
+    if kind not in {"Deployment", "StatefulSet", "DaemonSet", "Pod"}:
+        raise ValueError(f"Unsupported workload kind: {kind}")
+    if match_type not in {
+        "exact", "prefix", "glob", "substring", "token_match", "label_selector", "auto"
+    }:
+        raise ValueError(f"Unsupported match_type: {match_type}")
+
+    options = {"label_selector": pattern} if match_type == "label_selector" else {}
+    items: list[
+        client.V1Deployment | client.V1StatefulSet | client.V1DaemonSet | client.V1Pod
+    ] = []
+    try:
+        if kind == "Deployment":
+            result = cast(
+                client.V1DeploymentList,
+                apps.list_namespaced_deployment(namespace=namespace, **options),
+            )
+            items.extend(result.items or [])
+        elif kind == "StatefulSet":
+            result = cast(
+                client.V1StatefulSetList,
+                apps.list_namespaced_stateful_set(namespace=namespace, **options),
+            )
+            items.extend(result.items or [])
+        elif kind == "DaemonSet":
+            result = cast(
+                client.V1DaemonSetList,
+                apps.list_namespaced_daemon_set(namespace=namespace, **options),
+            )
+            items.extend(result.items or [])
+        else:
+            result = cast(
+                client.V1PodList,
+                core.list_namespaced_pod(namespace=namespace, **options),
+            )
+            items.extend(result.items or [])
+    except ApiException as exc:
+        raise api_error(exc) from exc
+
+    query_tokens = set(filter(None, re.split(r"[-._]+", pattern)))
+    reasons = {
+        "exact": "name equals pattern",
+        "prefix": "name starts with pattern",
+        "substring": "name contains pattern",
+        "token_match": "all pattern tokens match name-token prefixes",
+        "glob": "name matches glob pattern",
+        "label_selector": "Kubernetes label selector matched",
+    }
+    priority = ("exact", "prefix", "substring", "token_match")
+    matches: list[tuple[int, str, str]] = []
+    for item in items:
+        name = item.metadata.name if item.metadata is not None else None
+        if not isinstance(name, str):
+            continue
+        if match_type == "label_selector":
+            method = "label_selector"
+        elif match_type == "glob":
+            if not fnmatchcase(name, pattern):
+                continue
+            method = "glob"
+        else:
+            token_match = False
+            if match_type in {"token_match", "auto"} and query_tokens:
+                name_tokens = re.split(r"[-._]+", name)
+                token_match = all(
+                    any(name_token.startswith(token) for name_token in name_tokens)
+                    for token in query_tokens
+                )
+            conditions = {
+                "exact": name == pattern,
+                "prefix": name.startswith(pattern),
+                "substring": pattern in name,
+                "token_match": token_match,
+            }
+            if match_type != "auto" and not conditions[match_type]:
+                continue
+            method = next((candidate for candidate in priority if conditions[candidate]), None)
+            if method is None:
+                continue
+        matches.append((priority.index(method) if method in priority else len(priority), name, method))
+    matches.sort(key=lambda match: (match[0], match[1]))
+    return {
+        "requested_pattern": pattern,
+        "namespace": namespace,
+        "kind": kind,
+        "match_type": match_type,
+        "match_count": len(matches),
+        "matches": [
+            {
+                "name": name,
+                "kind": kind,
+                "namespace": namespace,
+                "match_method": method,
+                "match_reason": reasons[method],
+            }
+            for _, name, method in matches[:RESOLVED_MATCH_LIMIT]
+        ],
+        "resolved": len(matches) == 1,
+        "truncated": len(matches) > RESOLVED_MATCH_LIMIT,
+    }
 
 
 def find_unhealthy_deployments(

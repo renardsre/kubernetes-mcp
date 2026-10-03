@@ -437,6 +437,28 @@ class ToolHealthTests(unittest.TestCase):
                     "title": "get_pod_logsArguments",
                     "type": "object",
                 },
+                "resolve_workloads": {
+                    "properties": {
+                        "namespace": {"minLength": 1, "title": "Namespace", "type": "string"},
+                        "kind": {
+                            "enum": ["Deployment", "StatefulSet", "DaemonSet", "Pod"],
+                            "title": "Kind",
+                            "type": "string",
+                        },
+                        "pattern": {"minLength": 1, "title": "Pattern", "type": "string"},
+                        "match_type": {
+                            "enum": [
+                                "exact", "prefix", "glob", "substring", "token_match",
+                                "label_selector", "auto",
+                            ],
+                            "title": "Match Type",
+                            "type": "string",
+                        },
+                    },
+                    "required": ["namespace", "kind", "pattern", "match_type"],
+                    "title": "resolve_workloadsArguments",
+                    "type": "object",
+                },
                 "search_runbooks": {
                     "properties": {
                         "query": {"title": "Query", "type": "string"},

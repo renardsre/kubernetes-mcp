@@ -55,6 +55,7 @@ class TransportTests(unittest.TestCase):
                     "find_unhealthy_deployments",
                     "get_pod_logs",
                     "inspect_deployment_health",
+                    "resolve_workloads",
                     "search_runbooks",
                 ],
                 "prompts": ["kubernetes_service_investigation", "namespace_health_review"],
