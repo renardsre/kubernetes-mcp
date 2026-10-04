@@ -30,7 +30,7 @@ The five Tools are:
 - `inspect_deployment_health` gathers bounded health evidence for a known Deployment. It combines Deployment, ReplicaSet, Pod, container, event, and scheduling data using the existing four Kubernetes reads.
 - `find_unhealthy_deployments` finds unhealthy Deployment candidates in one namespace.
 - `get_pod_logs` reads bounded logs from a targeted Pod and container.
-- `resolve_workloads` resolves exact names, prefixes, globs, substrings, name tokens, or Kubernetes label selectors within one namespace and workload kind. Token matching accepts incomplete token prefixes such as `kraken-dash`. Use `auto` to collect and rank all plausible exact, prefix, substring, and token matches without silently choosing one. Each match includes its method and reason. `resolved` is true only for one match. Results are capped at 100, with `match_count` and `truncated` showing when more exist.
+- `resolve_workloads` resolves exact names, prefixes, globs, substrings, name tokens, or Kubernetes label selectors within one namespace and workload kind. Token matching accepts incomplete token prefixes such as `api-serv`. Use `auto` to collect and rank all plausible exact, prefix, substring, and token matches without silently choosing one. Each match includes its method and reason. `resolved` is true only for one match. Results are capped at 100, with `match_count` and `truncated` showing when more exist.
 - `search_runbooks` finds relevant runbooks by failure class or symptom. It returns metadata and a Resource URI, not the runbook body.
 
 The inspection result includes routing fields such as `evidence_sufficient`, `logs_recommended`, and `previous_logs_recommended`. It also separates three levels of failure information:
