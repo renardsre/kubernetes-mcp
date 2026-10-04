@@ -13,6 +13,8 @@ core = client.CoreV1Api()
 apps = client.AppsV1Api()
 
 RESOLVED_MATCH_LIMIT = 100
+EXECUTION_MAX_ITEMS = 16
+EXECUTION_MAX_CHARS = 4096
 
 
 def api_error(exc: ApiException) -> RuntimeError:
@@ -269,6 +271,41 @@ def container_state_summary(
         },
         "logs_available": logs_available,
     }
+
+
+def container_execution_summary(container: client.V1Container) -> dict[str, object]:
+    """Project Pod configuration, not execution results or image ENTRYPOINT/CMD.
+
+    Null/empty command or args means no explicit override was supplied. Image
+    defaults and environment substitutions are not resolved. Each argument list
+    is limited to 16 entries and 4096 total characters, with omissions marked.
+    """
+    image = container.image
+    truncated_fields: list[str] = []
+    result: dict[str, object] = {
+        "name": container.name,
+        "source": "pod.spec.containers",
+        "image": image[:512] if image is not None else None,
+        "truncated_fields": truncated_fields,
+    }
+    if image is not None and len(image) > 512:
+        truncated_fields.append("image")
+    for field in ("command", "args"):
+        values = cast(list[str] | None, getattr(container, field))
+        if values is None:
+            result[field] = None
+            continue
+        bounded: list[str] = []
+        remaining = EXECUTION_MAX_CHARS
+        for value in values[:EXECUTION_MAX_ITEMS]:
+            if remaining == 0:
+                break
+            bounded.append(value[:remaining])
+            remaining -= len(bounded[-1])
+        result[field] = bounded
+        if bounded != values:
+            truncated_fields.append(field)
+    return result
 
 
 def pod_health_summary(
@@ -859,10 +896,14 @@ def inspect_deployment_health(
             deployment
         )
     )
-    pod_summaries = [
-        pod_health_summary(pod)
-        for pod in workload_pods
-    ]
+    pod_summaries: list[dict[str, object]] = []
+    for pod in workload_pods:
+        summary = pod_health_summary(pod)
+        summary["container_execution"] = [
+            container_execution_summary(container)
+            for container in (pod.spec.containers or [] if pod.spec is not None else [])
+        ]
+        pod_summaries.append(summary)
 
     related_names = {name}
     related_names.update(

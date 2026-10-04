@@ -12,6 +12,8 @@
 
 Evidence already present in the inspection result is not a reason for additional Pod or Deployment reads.
 
+Correlate runtime observations with the affected container's `container_execution` image, command, and args already returned by inspection. Application log text alone does not prove an external dependency failure: a configured command may print that message and exit deliberately. Configuration is not proof of successful execution; omitted command/args do not reveal the image's internal defaults, and truncated fields are incomplete evidence. A container termination exit code is not a lifecycle hook exit status.
+
 ## Tool Decisions
 
 Inspect the existing evidence first. A specific termination reason or Pod event takes precedence over generic CrashLoop logs. Only when the mechanism remains unknown and `logs_recommended=true`, call `get_pod_logs` for **only the first `recommended_log_targets` entry**, using its pod, container, and `previous` value (default 100 lines). Do not guess a target, fan out across containers, or fetch both current and previous logs speculatively. If no usable target is supplied, escalate instead of guessing.

@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import cast
 from unittest.mock import Mock, patch
 
+from kubernetes.client import V1Container
 from kubernetes.client.exceptions import ApiException
 from mcp import Client
 
@@ -84,6 +85,8 @@ class ToolHealthTests(unittest.TestCase):
         primary_status: SimpleNamespace | None = None,
         hook_event_pod: str | None = None,
         post_start_command: list[str] | None = None,
+        spec_containers: list[V1Container] | None = None,
+        status_available: bool = True,
     ) -> dict[str, object]:
         first_status = primary_status or container_status(reason, last_reason, exit_code)
         deployment = SimpleNamespace(
@@ -109,9 +112,12 @@ class ToolHealthTests(unittest.TestCase):
                 owner_references=[SimpleNamespace(kind="ReplicaSet", name="demo-rs")],
             ),
             spec=SimpleNamespace(
-                containers=[
+                containers=spec_containers if spec_containers is not None else [
                     SimpleNamespace(
                         name=status.name,
+                        image=status.image,
+                        command=None,
+                        args=None,
                         resources=None,
                         lifecycle=(
                             SimpleNamespace(
@@ -137,7 +143,7 @@ class ToolHealthTests(unittest.TestCase):
                     *(other_statuses or []),
                 ],
                 phase=phase,
-            ),
+            ) if status_available else None,
         )
         events = [
             SimpleNamespace(
@@ -195,7 +201,101 @@ class ToolHealthTests(unittest.TestCase):
         mock_core.list_namespaced_pod.assert_called_once_with(namespace="sandbox")
         mock_core.list_namespaced_event.assert_called_once_with(namespace="sandbox")
         mock_core.read_namespaced_pod_log.assert_not_called()
+        self.assertEqual(len(mock_apps.mock_calls) + len(mock_core.mock_calls), 4)
         return result
+
+    def test_execution_configuration_is_exposed_without_status(self) -> None:
+        command = ["/bin/sh", "-c"]
+        args = ['echo "database connection failed"; exit 1']
+        for status_available in (True, False):
+            with self.subTest(status_available=status_available):
+                result = self.inspect(
+                    "CrashLoopBackOff", "Error", 1,
+                    spec_containers=[V1Container(
+                        name="app", image="example/app:test", command=command, args=args,
+                    )],
+                    status_available=status_available,
+                )
+                pod = cast(list[dict[str, object]], result["pods"])[0]
+                self.assertEqual(pod["container_execution"], [{
+                    "name": "app",
+                    "source": "pod.spec.containers",
+                    "image": "example/app:test",
+                    "command": command,
+                    "args": args,
+                    "truncated_fields": [],
+                }])
+
+    def test_execution_defaults_do_not_invent_image_entrypoint(self) -> None:
+        for value in (None, []):
+            with self.subTest(value=value):
+                result = self.inspect("ContainerCreating", spec_containers=[
+                    V1Container(name="app", image="example/app:test", command=value, args=value),
+                ])
+                pod = cast(list[dict[str, object]], result["pods"])[0]
+                config = cast(list[dict[str, object]], pod["container_execution"])[0]
+                self.assertEqual(config["command"], value)
+                self.assertEqual(config["args"], value)
+                self.assertEqual(config["truncated_fields"], [])
+
+    def test_execution_configuration_preserves_container_identity(self) -> None:
+        result = self.inspect(
+            "CrashLoopBackOff", "Error", 1,
+            other_statuses=[container_status("Running", name="sidecar")],
+            spec_containers=[
+                V1Container(name="sidecar", image="sidecar:2", command=["/proxy"], args=["--serve"]),
+                V1Container(name="app", image="app:2", command=["/app"], args=["--start"]),
+            ],
+        )
+        pod = cast(list[dict[str, object]], result["pods"])[0]
+        configs = {
+            item["name"]: item
+            for item in cast(list[dict[str, object]], pod["container_execution"])
+        }
+        self.assertEqual(
+            (configs["app"]["image"], configs["app"]["command"], configs["app"]["args"]),
+            ("app:2", ["/app"], ["--start"]),
+        )
+        self.assertEqual(
+            (configs["sidecar"]["image"], configs["sidecar"]["command"], configs["sidecar"]["args"]),
+            ("sidecar:2", ["/proxy"], ["--serve"]),
+        )
+
+    def test_execution_configuration_is_bounded_and_marks_truncation(self) -> None:
+        result = self.inspect("CrashLoopBackOff", spec_containers=[
+            V1Container(name="app", image="i" * 513, command=["part"] * 17, args=["a" * 4097]),
+        ])
+        pod = cast(list[dict[str, object]], result["pods"])[0]
+        config = cast(list[dict[str, object]], pod["container_execution"])[0]
+        self.assertEqual(config["image"], "i" * 512)
+        self.assertEqual(config["command"], ["part"] * 16)
+        self.assertEqual(config["args"], ["a" * 4096])
+        self.assertEqual(config["truncated_fields"], ["image", "command", "args"])
+
+    def test_misleading_database_log_is_not_a_database_failure_class(self) -> None:
+        command = ["/bin/sh", "-c"]
+        args = ['echo "application starting"; echo "database connection failed"; exit 1']
+        result = self.inspect("CrashLoopBackOff", "Error", 1, spec_containers=[
+            V1Container(name="app", image="example/app:test", command=command, args=args),
+        ])
+        core = Mock()
+        core.read_namespaced_pod_log.return_value = "application starting\ndatabase connection failed\n"
+        with patch.object(service, "core", core):
+            logs = service.get_pod_logs("sandbox", "demo-pod", "app", previous=True)
+        self.assertIn("database connection failed", str(logs["logs"]))
+        self.assertEqual(result["failure_class"], "CrashLoopBackOff")
+        self.assertIsNone(result["failure_signal"])
+        self.assertFalse(result["diagnosis_included"])
+        self.assertTrue(result["logs_recommended"])
+        self.assertEqual(result["recommended_log_targets"], [
+            {"pod": "demo-pod", "container": "app", "previous": True},
+        ])
+        pod = cast(list[dict[str, object]], result["pods"])[0]
+        status = cast(list[dict[str, object]], pod["containers"])[0]
+        self.assertEqual(cast(dict[str, object], status["last_termination"])["exit_code"], 1)
+        config = cast(list[dict[str, object]], pod["container_execution"])[0]
+        self.assertEqual(config["command"], command)
+        self.assertEqual(config["args"], args)
 
     def test_image_pull_classes_preserve_existing_reason(self) -> None:
         for reason in ("ImagePullBackOff", "ErrImagePull"):
